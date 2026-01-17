@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>还剩几小时？</title>
+
+<!-- ====== PWA 必须 ====== -->
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1e3c72">
+<link rel="apple-touch-icon" href="/icons/clock-192.png">
+
+<style>
+body{
+    font-family: "Microsoft YaHei";
+    background: linear-gradient(135deg,#0f2027,#203a43,#2c5364);
+    margin:0;
+}
+
+.container{
+    max-width: 900px;
+    margin:0 auto;
+    background:white;
+    min-height:100vh;
+    padding:15px;
+}
+
+.header{
+    background:#1e3c72;
+    color:white;
+    padding:12px;
+    text-align:center;
+    font-size:20px;
+    border-radius:8px;
+}
+
+.section{
+    border:1px solid #ddd;
+    padding:15px;
+    margin:10px 0;
+    border-radius:10px;
+}
+
+.flex{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+}
+
+.card{
+    flex:1;
+    padding:12px;
+    border-radius:10px;
+    text-align:center;
+    min-width:150px;
+}
+
+.balance-card{ background:#e8f5e9; }
+.debt-card{ background:#ffebee; }
+
+button{
+    padding:10px;
+    border:none;
+    border-radius:8px;
+    color:white;
+    margin:5px 0;
+}
+
+.deposit{ background:#2ecc71; }
+.withdraw{ background:#e74c3c; }
+.loan{ background:#f39c12; }
+.repay{ background:#8e44ad; }
+.save{ background:#3498db; }
+.reset{ background:#95a5a6; }
+
+table{
+    width:100%;
+    border-collapse: collapse;
+}
+th,td{
+    border:1px solid #ddd;
+    padding:6px;
+    text-align:center;
+    font-size:14px;
+}
+
+canvas{
+    width:100%;
+    height:260px;
+    border:1px solid #ddd;
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+
+<div class="header">🏦 还剩几小时？</div>
+
+<div class="section flex">
+  <div class="card balance-card">
+    <h3>当前余额</h3>
+    <h2>¥ <span id="balance">0.00</span></h2>
+  </div>
+  <div class="card debt-card">
+    <h3>剩余欠款</h3>
+    <h2>¥ <span id="debt">0.00</span></h2>
+  </div>
+</div>
+
+<div class="section">
+<h3>💰 存取款</h3>
+<input type="number" id="amount" placeholder="输入金额"><br>
+<button class="deposit" onclick="deposit()">存入</button>
+<button class="withdraw" onclick="withdraw()">取出</button>
+</div>
+
+<div class="section">
+<h3>🏦 申请贷款</h3>
+<input type="number" id="loanAmount" placeholder="贷款金额"><br>
+<input type="number" id="interest" placeholder="年利率 %"><br>
+<input type="number" id="years" placeholder="贷款年数"><br><br>
+<button class="loan" onclick="takeLoan()">申请贷款</button>
+<p id="loanInfo"></p>
+</div>
+
+<div class="section">
+<h3>💸 还款</h3>
+<input type="number" id="repayAmount" placeholder="还款金额"><br>
+<button class="repay" onclick="repay()">立即还款</button>
+</div>
+
+<div class="section">
+<h3>📅 还款分期表</h3>
+<table>
+<tr><th>期数</th><th>每月应还</th><th>总期数</th></tr>
+<tbody id="schedule"></tbody>
+</table>
+</div>
+
+<div class="section">
+<h3>📈 余额曲线</h3>
+<canvas id="chart"></canvas>
+</div>
+
+<div class="section">
+<h3>📜 交易记录</h3>
+<table>
+<tr>
+<th>时间</th><th>类型</th><th>金额</th><th>余额</th><th>剩余欠款</th>
+</tr>
+<tbody id="history"></tbody>
+</table>
+</div>
+
+<div class="section">
+<button class="save" onclick="saveData()">保存数据</button>
+<button class="reset" onclick="resetData()">清空所有数据</button>
+</div>
+
+</div>
+
+<script>
+// ======== 数据（云端同样只在浏览器本地保存） ========
+let balance = parseFloat(localStorage.getItem("balance") || 0);
+let debt = parseFloat(localStorage.getItem("debt") || 0);
+let history = JSON.parse(localStorage.getItem("history") || "[]");
+let schedule = JSON.parse(localStorage.getItem("schedule") || "[]");
+
+// ======== UI ========
+function updateUI(){
+    document.getElementById("balance").innerText = balance.toFixed(2);
+    document.getElementById("debt").innerText = debt.toFixed(2);
+
+    let h = document.getElementById("history");
+    h.innerHTML = "";
+    history.forEach(r=>{
+        h.innerHTML += `
+        <tr>
+        <td>${r.time}</td>
+        <td>${r.type}</td>
+        <td>¥${r.amount}</td>
+        <td>¥${r.balance}</td>
+        <td>¥${r.debt}</td>
+        </tr>`;
+    });
+
+    let s = document.getElementById("schedule");
+    s.innerHTML = "";
+    schedule.forEach(r=>{
+        s.innerHTML += `
+        <tr>
+        <td>${r.month}</td>
+        <td>¥${r.monthPay}</td>
+        <td>${r.totalMonths}</td>
+        </tr>`;
+    });
+
+    drawChart();
+}
+
+function addRecord(type, amount){
+    history.push({
+        time: new Date().toLocaleString(),
+        type: type,
+        amount: amount.toFixed(2),
+        balance: balance.toFixed(2),
+        debt: debt.toFixed(2)
+    });
+}
+
+// ======== 功能 ========
+function deposit(){
+    let amt = parseFloat(amount.value);
+    if(isNaN(amt) || amt<=0){ alert("请输入有效金额"); return; }
+    balance += amt;
+    addRecord("存入", amt);
+    updateUI();
+}
+
+function withdraw(){
+    let amt = parseFloat(amount.value);
+    if(isNaN(amt) || amt<=0){ alert("请输入有效金额"); return; }
+    if(amt > balance){ alert("余额不足"); return; }
+    balance -= amt;
+    addRecord("取出", amt);
+    updateUI();
+}
+
+function takeLoan(){
+    let L = parseFloat(loanAmount.value);
+    let r = parseFloat(interest.value)/100;
+    let n = parseInt(years.value);
+
+    if(isNaN(L)||isNaN(r)||isNaN(n)){ alert("请填写完整"); return; }
+
+    let totalInterest = L*r*n;
+    let totalRepay = L + totalInterest;
+    let totalMonths = n*12;
+    let monthPay = totalRepay/totalMonths;
+
+    balance += L;
+    debt += totalRepay;
+
+    addRecord("贷款到账", L);
+
+    schedule = [];
+    for(let i=1;i<=totalMonths;i++){
+        schedule.push({
+            month:i,
+            monthPay:monthPay.toFixed(2),
+            totalMonths:totalMonths
+        });
+    }
+
+    loanInfo.innerText =
+    `应还总额 ¥${totalRepay.toFixed(2)}，每月 ¥${monthPay.toFixed(2)}，共 ${totalMonths} 期`;
+
+    updateUI();
+}
+
+function repay(){
+    let amt = parseFloat(repayAmount.value);
+    if(isNaN(amt)||amt<=0){ alert("金额无效"); return; }
+    if(amt>balance){ alert("余额不足"); return; }
+    if(debt<=0){ alert("无欠款"); return; }
+
+    balance -= amt;
+    debt = Math.max(0, debt-amt);
+    addRecord("还款", amt);
+    updateUI();
+}
+
+// ======== 曲线 ========
+function drawChart(){
+    let c=document.getElementById("chart");
+    let ctx=c.getContext("2d");
+    ctx.clearRect(0,0,c.width,c.height);
+
+    if(history.length<1) return;
+
+    let b=history.map(r=>parseFloat(r.balance));
+    let max=Math.max(...b);
+    let min=Math.min(...b);
+    let step=c.width/(b.length-1||1);
+
+    ctx.beginPath();
+    b.forEach((v,i)=>{
+        let y=c.height-((v-min)/(max-min||1))*c.height;
+        let x=i*step;
+        i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+    });
+    ctx.strokeStyle="#1e3c72";
+    ctx.stroke();
+}
+
+// ======== 保存 ========
+function saveData(){
+    localStorage.setItem("balance", balance);
+    localStorage.setItem("debt", debt);
+    localStorage.setItem("history", JSON.stringify(history));
+    localStorage.setItem("schedule", JSON.stringify(schedule));
+    alert("已保存");
+}
+
+function resetData(){
+    if(confirm("确定清空？")){
+        localStorage.clear();
+        balance=0; debt=0; history=[]; schedule=[];
+        updateUI();
+    }
+}
+
+updateUI();
+
+// ====== 注册 PWA Service Worker ======
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js');
+}
+</script>
+</body>
+</html>
